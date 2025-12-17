@@ -2,36 +2,120 @@ import math
 import random
 import sys
 import pygame
+import os
+from pathlib import Path
+import numpy as np
 
-W, H = 1024, 960
+W, H = 1024, 1024
 FPS = 60
 
 # >>> Wydajność:
 SCALE = 3                       # było 3
 BG_UPDATE_EVERY = 1             # aktualizuj tło co N klatek
-USE_SMOOTHSCALE = False         # smoothscale jest drogi
 NOISE_OCTAVES = 12               # było 4
 
 PLASMA_EDGE_SHARPNESS = 3.0
 PLASMA_INTENSITY = 1.2
 CENTER_DETAIL_POWER = 3.2
 
-ELLIPSE_DRIFT_SPEED = 0.25
-ELLIPSE_MORPH_SPEED = 0.00512
 
-SQUARE_COUNT = 80
-SQUARE_MIN = 8
-SQUARE_MAX = 24
-SQUARE_DRIFT = 0.00725
+def _seed_offsets(seeds):
+    """Zamienia listę seedów na stabilne offsety (ox, oy) dla fbm."""
+    out = []
+    for s in seeds:
+        # deterministycznie rozbijamy seed na 2 floaty
+        # (tu prosto; możesz podmienić na coś bardziej fancy)
+        ox = (s * 37.13) % 1000.0
+        oy = (s * 91.70) % 1000.0
+        out.append((ox, oy))
+    return out
 
 
+def generate_noise_maps(bg_w: int, bg_h: int, scale: int, freq: float, octaves: int, seeds) -> list[np.ndarray]:
+    """
+    Generuje listę map noise (float32) o rozmiarze [bg_h, bg_w].
+    freq: częstotliwość próbkowania (np. 0.008)
+    """
+    maps: list[np.ndarray] = []
+    offsets = _seed_offsets(seeds)
 
-def put_rgb(buf: bytearray, w: int, x: int, y: int, r: int, g: int, b: int) -> None:
-    """Zapisuje 1 piksel do bufora RGB (row-major)."""
-    i = (y * w + x) * 3
-    buf[i] = r & 255
-    buf[i + 1] = g & 255
-    buf[i + 2] = b & 255
+    for (ox, oy) in offsets:
+        m = np.zeros((bg_h, bg_w), dtype=np.float32)
+        for y in range(bg_h):
+            py = (y + 0.5) * scale
+            for x in range(bg_w):
+                px = (x + 0.5) * scale
+                m[y, x] = fbm(px * freq + ox, py * freq + oy, octaves)
+        maps.append(m)
+
+    return maps
+
+
+def save_noise_cache(cache_dir: str | Path, base_maps: list[np.ndarray], shimmer_maps: list[np.ndarray]) -> None:
+    cache_dir = Path(cache_dir)
+    cache_dir.mkdir(parents=True, exist_ok=True)
+
+    for i, m in enumerate(base_maps):
+        np.save(cache_dir / f"base_{i}.npy", m)
+
+    for i, m in enumerate(shimmer_maps):
+        np.save(cache_dir / f"shimmer_{i}.npy", m)
+
+
+def load_noise_cache(cache_dir: str | Path, count: int = 3) -> tuple[list[np.ndarray], list[np.ndarray]]:
+    cache_dir = Path(cache_dir)
+
+    base_maps = []
+    shimmer_maps = []
+    for i in range(count):
+        base_maps.append(np.load(cache_dir / f"base_{i}.npy"))
+        shimmer_maps.append(np.load(cache_dir / f"shimmer_{i}.npy"))
+
+    return base_maps, shimmer_maps
+
+
+def ensure_noise_cache(
+    cache_dir: str | Path,
+    bg_w: int,
+    bg_h: int,
+    scale: int,
+    base_freq: float,
+    shimmer_freq: float,
+    octaves: int,
+    base_seeds=(1, 2, 3),
+    shimmer_seeds=(101, 102, 103),
+    count: int = 3,
+) -> tuple[list[np.ndarray], list[np.ndarray]]:
+    """
+    Jeśli cache istnieje i pasuje rozmiarami → wczytaj.
+    Jeśli nie → wygeneruj 3 + 3 mapy i zapisz.
+    """
+    cache_dir = Path(cache_dir)
+    expected = [cache_dir / f"base_{i}.npy" for i in range(count)] + [cache_dir / f"shimmer_{i}.npy" for i in range(count)]
+    have_all = all(p.exists() for p in expected)
+
+    if have_all:
+        print("Reading noise and shimmer from cache")
+        base_maps, shimmer_maps = load_noise_cache(cache_dir, count=count)
+
+        # szybka walidacja rozmiaru (żeby nie użyć starego cache po zmianie SCALE/W/H)
+        ok = True
+        for m in base_maps + shimmer_maps:
+            if m.shape != (bg_h, bg_w):
+                ok = False
+                break
+
+        if ok:
+            return base_maps, shimmer_maps
+
+    # jeśli nie ma cache albo nie pasuje → generuj
+    print("Generating noise cache")
+    base_maps = generate_noise_maps(bg_w, bg_h, scale, base_freq, octaves, seeds=base_seeds)
+    print("Generating shimmer cache")
+    shimmer_maps = generate_noise_maps(bg_w, bg_h, scale, shimmer_freq, octaves, seeds=shimmer_seeds)
+
+    save_noise_cache(cache_dir, base_maps, shimmer_maps)
+    return base_maps, shimmer_maps
 
 
 def smoothstep(x: float) -> float:
@@ -80,34 +164,6 @@ def ellipse_level(x: float, y: float, cx: float, cy: float, a: float, b: float) 
 def ellipse_point(cx: float, cy: float, a: float, b: float, ang: float):
     return (cx + a * math.cos(ang), cy + b * math.sin(ang))
 
-class Square:
-    def __init__(self):
-        self.ang = random.random() * math.tau
-        self.ang_vel = (random.random() * 2 - 1) * SQUARE_DRIFT
-        self.base = random.uniform(SQUARE_MIN, SQUARE_MAX)
-        self.phase = random.random() * math.tau
-        self.phase_vel = random.uniform(0.008, 0.02)
-        self.life = random.random()
-        self.life_vel = random.uniform(0.002, 0.008)
-        self.size_wobble = random.uniform(0.15, 0.45)
-
-    def update(self):
-        self.ang += self.ang_vel
-        self.phase += self.phase_vel
-        self.life += self.life_vel
-        if self.life > 1.0:
-            self.life = 0.0
-            self.ang = random.random() * math.tau
-            self.ang_vel = (random.random() * 2 - 1) * SQUARE_DRIFT
-            self.base = random.uniform(SQUARE_MIN, SQUARE_MAX)
-            self.phase = random.random() * math.tau
-
-    def alpha(self) -> float:
-        return math.sin(math.pi * self.life)
-
-    def size(self) -> float:
-        return self.base * (1.0 + self.size_wobble * math.sin(self.phase))
-
 def plasma_color(intensity: float, tint_shift: float = 0.0):
     intensity = max(0.0, min(1.2, intensity))
     b = int(40 + 200 * intensity)
@@ -117,40 +173,39 @@ def plasma_color(intensity: float, tint_shift: float = 0.0):
     b = max(0, min(255, int(b + 20 * tint_shift)))
     return r, g, b
 
-# --- PRECOMPUTE: stałe mapy (liczone raz) ---
-
-
 
 def main():
     pygame.init()
-    screen = pygame.display.set_mode((W, H))
+    font = pygame.font.SysFont("consolas", 8)
+
     pygame.display.set_caption("Hypnagogi — płynniejsza wersja")
     clock = pygame.time.Clock()
 
     bg_w = W // SCALE
     bg_h = H // SCALE
+
+    screen = pygame.display.set_mode((bg_w, bg_h), pygame.SCALED)
+
     bg = pygame.Surface((bg_w, bg_h))
 
-    noise_map = [[0.0] * bg_w for _ in range(bg_h)]
-    base_map  = [[0.0] * bg_w for _ in range(bg_h)]  # PLASMA_INTENSITY * center_factor (i ew. inne stałe)
+    CACHE_DIR = ".noise_cache"
 
-    for y in range(bg_h):
-        py = (y + 0.5) * SCALE
-        ry = (py - H * 0.5) / (H * 0.5)
-        for x in range(bg_w):
-            px = (x + 0.5) * SCALE
-            rx = (px - W * 0.5) / (W * 0.5)
+    # Ustal częstotliwości osobno:
+    BASE_FREQ = 0.0065      # „większe plamy”
+    SHIMMER_FREQ = 0.013    # „drobniejszy detal do jarzenia”
 
-            r = math.sqrt(rx * rx + ry * ry)
-            center_factor = max(0.0, 1.0 - r)
-            center_factor = center_factor ** CENTER_DETAIL_POWER
-
-            # STATYCZNY noise — liczony raz
-            n = fbm(px * 0.008, py * 0.008, NOISE_OCTAVES)
-            noise_map[y][x] = n
-
-            # wszystko co stałe wrzuć do base_map (tu: intensywność * radial)
-            base_map[y][x] = PLASMA_INTENSITY * center_factor
+    base_maps, shimmer_maps = ensure_noise_cache(
+        CACHE_DIR,
+        bg_w=bg_w,
+        bg_h=bg_h,
+        scale=SCALE,
+        base_freq=BASE_FREQ,
+        shimmer_freq=SHIMMER_FREQ,
+        octaves=NOISE_OCTAVES,  # użyj swojego parametru
+        base_seeds=(11, 22, 33),
+        shimmer_seeds=(111, 222, 333),
+        count=3,
+    )
 
     cx, cy = W * 0.5, H * 0.52
     base_a, base_b = W * 0.23, H * 0.18
@@ -159,12 +214,25 @@ def main():
     morph_t = random.random() * 999
     t = 0.0
     rgb_buf = bytearray(bg_w * bg_h * 3)
-    squares = [Square() for _ in range(SQUARE_COUNT)]
 
     frame = 0
-    cached_bg_scaled = None
+
+    # --- stała mapa centrum (raz) ---
+    xs = (np.arange(bg_w) + 0.5) * SCALE
+    ys = (np.arange(bg_h) + 0.5) * SCALE
+    PX, PY = np.meshgrid(xs, ys)  # shape: (bg_h, bg_w)
+
+    RX = (PX - W * 0.5) / (W * 0.5)
+    RY = (PY - H * 0.5) / (H * 0.5)
+    R = np.sqrt(RX * RX + RY * RY)
+
+    center_map = np.clip(1.0 - R, 0.0, 1.0).astype(np.float32) ** CENTER_DETAIL_POWER
+
+    # widok na bufor (tworzysz raz!)
+    buf_view = np.frombuffer(rgb_buf, dtype=np.uint8).reshape(bg_h, bg_w, 3)
 
     running = True
+
     while running:
         dt = clock.tick(FPS) / 1000.0
         t += dt
@@ -176,86 +244,52 @@ def main():
             if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
                 running = False
 
-        drift_tx += 0.22
-        drift_ty += 0.19
-        dx = (fbm(drift_tx * 0.01, 0.0, 3)) * 2.0
-        dy = (fbm(0.0, drift_ty * 0.01, 3)) * 2.0
+        phase = (t * 0.10) % 3.0
+        i0 = int(phase) % 3
+        i1 = (i0 + 1) % 3
+        f = phase - int(phase)
+        f = f * f * (3 - 2 * f)  # smoothstep
+        invf = 1.0 - f
 
-        cx += dx * (ELLIPSE_DRIFT_SPEED * 60 * dt)
-        cy += dy * (ELLIPSE_DRIFT_SPEED * 60 * dt)
+        base0 = base_maps[i0]
+        base1 = base_maps[i1]
+        shim0 = shimmer_maps[i0]
+        shim1 = shimmer_maps[i1]
 
-        margin = 80
-        cx = max(margin + base_a, min(W - margin - base_a, cx))
-        cy = max(margin + base_b, min(H - margin - base_b, cy))
+        # crossfade (raz na klatkę)
+        phase = (t * 0.10) % 3.0
+        i0 = int(phase)
+        i1 = (i0 + 1) % 3
+        f = phase - i0
+        f = f * f * (3.0 - 2.0 * f)     # smoothstep
+        invf = 1.0 - f
 
-        #morph_t += ELLIPSE_MORPH_SPEED * 60 * dt
-        #m = 0.5 + 0.5 * math.sin(morph_t)
-        #a = base_a * (1.75 + 0.55 * m)
-        #b = base_b * (1.75 + 0.55 * (1.0 - m))
+        # blend map (wektorowo)
+        n_base = invf * base_maps[i0] + f * base_maps[i1]
+        n_shim = invf * shimmer_maps[i0] + f * shimmer_maps[i1]
 
-        # --- Aktualizuj tło rzadziej ---
-        if frame % BG_UPDATE_EVERY == 0 or cached_bg_scaled is None:
-            for y in range(bg_h):
-                py = (y + 0.5) * SCALE
-                ry = (py - H * 0.5) / (H * 0.5)
-                row_n = noise_map[y]
-                row_b = base_map[y]
-                for x in range(bg_w):
-                    px = (x + 0.5) * SCALE
-                    rx = (px - W * 0.5) / (W * 0.5)
-                    r = math.sqrt(rx * rx + ry * ry)
-                    center_factor = max(0.0, 1.0 - r)
-                    center_factor = center_factor ** CENTER_DETAIL_POWER
+        # shimmer/tint (wektorowo)
+        shimmer = 0.55 + 0.45 * np.sin(n_shim * 6.0 + t * 1.7).astype(np.float32)
+        tint    = 0.25 * np.sin(t * 0.7 + n_base * 2.0).astype(np.float32)
 
-                    #lvl = ellipse_level(px, py, cx, cy, a, b)
-                    #edge = math.exp(-PLASMA_EDGE_SHARPNESS * abs(lvl))
+        # intensywność plazmy
+        intensity = (PLASMA_INTENSITY * shimmer * center_map).astype(np.float32)
+        ii = np.clip(intensity, 0.0, 1.2)
 
-                    #n = fbm(px * 0.02 + t * 0.9, py * 0.02 - t * 0.7, NOISE_OCTAVES)
-                    tx = 0.4 * math.sin(t*0.2)
-                    ty = 0.4 * math.cos(t*0.3)
-                    
-                    #n = fbm(px * 0.008+tx, py * 0.008 + ty, NOISE_OCTAVES)
-                    n = row_n[x]
-                    shimmer = -0.55 + 2.45 * math.sin((n *  3.0 + t * 0.5))
+        # paleta (RGB uint8)
+        b = (40 + 200 * ii).clip(0, 255).astype(np.uint8)
+        g = (10 + 140 * ii + 40 * tint).clip(0, 255).astype(np.uint8)
+        r = (0  + 35  * ii).clip(0, 255).astype(np.uint8)
 
-                    #intensity = PLASMA_INTENSITY * edge * shimmer * center_factor
-                    intensity = PLASMA_INTENSITY * shimmer * center_factor
-                    tint = 0.45 * math.sin(t * 1.1 + n * 3.0)
-                    r1,g1,b1 = plasma_color(intensity * tint, tint)
-                    put_rgb(rgb_buf, bg_w, x, y, r1, g1, b1)
-                    #bg.set_at((x, y), plasma_color(intensity * tint, tint))
+        # wpis do bufora (bez kopiowania „po pikselu”)
+        buf_view[..., 0] = r
+        buf_view[..., 1] = g
+        buf_view[..., 2] = b
 
-            if USE_SMOOTHSCALE:
-                cached_bg_scaled = pygame.transform.smoothscale(bg, (W, H))
-            else:
-                bg_frame = pygame.image.frombuffer(rgb_buf, (bg_w, bg_h), "RGB")
-                #cached_bg_scaled = pygame.image.frombuffer(rgb_buf, (bg_w, bg_h), "RGB")
-                cached_bg_scaled = pygame.transform.scale(bg_frame, (W, H))
-                #cached_bg_scaled = pygame.transform.scale(bg, (W, H))
-
-        screen.blit(cached_bg_scaled, (0, 0))
-
-        # czarna elipsa
-        #pygame.draw.ellipse(screen, (0, 0, 0), pygame.Rect(cx - a, cy - b, 2 * a, 2 * b))
-
-        # kwadraty - bez tworzenia surfów per-kwadrat (taniej)
-#        for s in squares:
-#            s.update()
-#            alpha = s.alpha()
-#            if alpha < 0.03:
-#                continue
-#
-#            ang = s.ang
-#            px, py = ellipse_point(cx, cy, a, b, ang)
-#
-#            size = s.size()
-#            half = size * 0.5
-
-            # zamiast alfa-surface: prosty trick — kilka cienkich obrysów
-            # (wizualnie przypomina "mignięcia", a jest szybkie)
-#            rect = pygame.Rect(px - half, py - half, size, size)
-            #pygame.draw.rect(screen, (0, 0, 0), rect)
-
+        screen.blit(pygame.image.frombuffer(rgb_buf, (bg_w, bg_h), "RGB"), (0, 0))
+        fps = clock.get_fps()
+        fps_text = font.render(f"{fps:5.1f} FPS", True, (40, 200, 255))
+        screen.blit(fps_text, (10, 10))
         pygame.display.flip()
 
     pygame.quit()
