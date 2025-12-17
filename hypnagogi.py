@@ -3,18 +3,18 @@ import random
 import sys
 import pygame
 
-W, H = 800, 600
+W, H = 1024, 960
 FPS = 60
 
 # >>> Wydajność:
-SCALE = 5                       # było 3
-BG_UPDATE_EVERY = 4             # aktualizuj tło co N klatek
+SCALE = 3                       # było 3
+BG_UPDATE_EVERY = 1             # aktualizuj tło co N klatek
 USE_SMOOTHSCALE = False         # smoothscale jest drogi
-NOISE_OCTAVES = 5               # było 4
+NOISE_OCTAVES = 12               # było 4
 
-PLASMA_EDGE_SHARPNESS = 4.0
-PLASMA_INTENSITY = 2.2
-CENTER_DETAIL_POWER = 2.2
+PLASMA_EDGE_SHARPNESS = 3.0
+PLASMA_INTENSITY = 1.2
+CENTER_DETAIL_POWER = 3.2
 
 ELLIPSE_DRIFT_SPEED = 0.25
 ELLIPSE_MORPH_SPEED = 0.00512
@@ -23,6 +23,15 @@ SQUARE_COUNT = 80
 SQUARE_MIN = 8
 SQUARE_MAX = 24
 SQUARE_DRIFT = 0.00725
+
+
+
+def put_rgb(buf: bytearray, w: int, x: int, y: int, r: int, g: int, b: int) -> None:
+    """Zapisuje 1 piksel do bufora RGB (row-major)."""
+    i = (y * w + x) * 3
+    buf[i] = r & 255
+    buf[i + 1] = g & 255
+    buf[i + 2] = b & 255
 
 
 def smoothstep(x: float) -> float:
@@ -106,7 +115,11 @@ def plasma_color(intensity: float, tint_shift: float = 0.0):
     r = int(0 + 35 * intensity)
     g = max(0, min(255, int(g + 40 * tint_shift)))
     b = max(0, min(255, int(b + 20 * tint_shift)))
-    return (r, g, b)
+    return r, g, b
+
+# --- PRECOMPUTE: stałe mapy (liczone raz) ---
+
+
 
 def main():
     pygame.init()
@@ -118,13 +131,34 @@ def main():
     bg_h = H // SCALE
     bg = pygame.Surface((bg_w, bg_h))
 
+    noise_map = [[0.0] * bg_w for _ in range(bg_h)]
+    base_map  = [[0.0] * bg_w for _ in range(bg_h)]  # PLASMA_INTENSITY * center_factor (i ew. inne stałe)
+
+    for y in range(bg_h):
+        py = (y + 0.5) * SCALE
+        ry = (py - H * 0.5) / (H * 0.5)
+        for x in range(bg_w):
+            px = (x + 0.5) * SCALE
+            rx = (px - W * 0.5) / (W * 0.5)
+
+            r = math.sqrt(rx * rx + ry * ry)
+            center_factor = max(0.0, 1.0 - r)
+            center_factor = center_factor ** CENTER_DETAIL_POWER
+
+            # STATYCZNY noise — liczony raz
+            n = fbm(px * 0.008, py * 0.008, NOISE_OCTAVES)
+            noise_map[y][x] = n
+
+            # wszystko co stałe wrzuć do base_map (tu: intensywność * radial)
+            base_map[y][x] = PLASMA_INTENSITY * center_factor
+
     cx, cy = W * 0.5, H * 0.52
     base_a, base_b = W * 0.23, H * 0.18
     drift_tx = random.random() * 999
     drift_ty = random.random() * 999
     morph_t = random.random() * 999
     t = 0.0
-
+    rgb_buf = bytearray(bg_w * bg_h * 3)
     squares = [Square() for _ in range(SQUARE_COUNT)]
 
     frame = 0
@@ -154,16 +188,18 @@ def main():
         cx = max(margin + base_a, min(W - margin - base_a, cx))
         cy = max(margin + base_b, min(H - margin - base_b, cy))
 
-        morph_t += ELLIPSE_MORPH_SPEED * 60 * dt
-        m = 0.5 + 0.5 * math.sin(morph_t)
-        a = base_a * (1.75 + 0.55 * m)
-        b = base_b * (1.75 + 0.55 * (1.0 - m))
+        #morph_t += ELLIPSE_MORPH_SPEED * 60 * dt
+        #m = 0.5 + 0.5 * math.sin(morph_t)
+        #a = base_a * (1.75 + 0.55 * m)
+        #b = base_b * (1.75 + 0.55 * (1.0 - m))
 
         # --- Aktualizuj tło rzadziej ---
         if frame % BG_UPDATE_EVERY == 0 or cached_bg_scaled is None:
             for y in range(bg_h):
                 py = (y + 0.5) * SCALE
                 ry = (py - H * 0.5) / (H * 0.5)
+                row_n = noise_map[y]
+                row_b = base_map[y]
                 for x in range(bg_w):
                     px = (x + 0.5) * SCALE
                     rx = (px - W * 0.5) / (W * 0.5)
@@ -171,24 +207,31 @@ def main():
                     center_factor = max(0.0, 1.0 - r)
                     center_factor = center_factor ** CENTER_DETAIL_POWER
 
-                    lvl = ellipse_level(px, py, cx, cy, a, b)
-                    edge = math.exp(-PLASMA_EDGE_SHARPNESS * abs(lvl))
+                    #lvl = ellipse_level(px, py, cx, cy, a, b)
+                    #edge = math.exp(-PLASMA_EDGE_SHARPNESS * abs(lvl))
 
                     #n = fbm(px * 0.02 + t * 0.9, py * 0.02 - t * 0.7, NOISE_OCTAVES)
-                    tx = 0.8 * math.sin(t*0.2)
-                    ty = 0.8 * math.cos(t*0.3)
-                    n = fbm(px * 0.008+tx, py * 0.008 + ty, NOISE_OCTAVES)
+                    tx = 0.4 * math.sin(t*0.2)
+                    ty = 0.4 * math.cos(t*0.3)
+                    
+                    #n = fbm(px * 0.008+tx, py * 0.008 + ty, NOISE_OCTAVES)
+                    n = row_n[x]
+                    shimmer = -0.55 + 2.45 * math.sin((n *  3.0 + t * 0.5))
 
-                    shimmer = -0.55 + 2.45 * math.sin((n *  6.0 + t * 0.5))
-
-                    intensity = PLASMA_INTENSITY * edge * shimmer * center_factor
+                    #intensity = PLASMA_INTENSITY * edge * shimmer * center_factor
+                    intensity = PLASMA_INTENSITY * shimmer * center_factor
                     tint = 0.45 * math.sin(t * 1.1 + n * 3.0)
-                    bg.set_at((x, y), plasma_color(intensity * tint, tint))
+                    r1,g1,b1 = plasma_color(intensity * tint, tint)
+                    put_rgb(rgb_buf, bg_w, x, y, r1, g1, b1)
+                    #bg.set_at((x, y), plasma_color(intensity * tint, tint))
 
             if USE_SMOOTHSCALE:
                 cached_bg_scaled = pygame.transform.smoothscale(bg, (W, H))
             else:
-                cached_bg_scaled = pygame.transform.scale(bg, (W, H))
+                bg_frame = pygame.image.frombuffer(rgb_buf, (bg_w, bg_h), "RGB")
+                #cached_bg_scaled = pygame.image.frombuffer(rgb_buf, (bg_w, bg_h), "RGB")
+                cached_bg_scaled = pygame.transform.scale(bg_frame, (W, H))
+                #cached_bg_scaled = pygame.transform.scale(bg, (W, H))
 
         screen.blit(cached_bg_scaled, (0, 0))
 
