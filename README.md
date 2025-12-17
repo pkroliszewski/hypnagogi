@@ -71,7 +71,7 @@ Projekt może być traktowany jako:
 
 ### 1. Klonowanie repozytorium
 ```bash
-git clone git@github.com:USERNAME/hypnagogi.git
+git clone git@github.com:pkroliszewski/hypnagogi.git
 cd hypnagogi
 ```
 
