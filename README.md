@@ -1,117 +1,122 @@
 # Hypnagogi
 
-**Hypnagogi** to eksperymentalna symulacja wizualna inspirowana stanami **hipnagogicznymi** — przejściem pomiędzy jawą a snem, w którym percepcja wzrokowa przestaje reagować na bodźce zewnętrzne i zaczyna generować **autonomiczne struktury światła**.
+**Hypnagogi** is an experimental visual simulation inspired by **hypnagogic states** — the transition between wakefulness and sleep, in which visual perception stops responding to external stimuli and begins to generate **autonomous light structures**.
 
-Projekt koncentruje się wyłącznie na **plazmie i jarzeniu**:
-- bez obiektów,
-- bez narracji,
-- bez symboliki,
-- bez centrum uwagi.
+The project focuses exclusively on **plasma and glow**:
+- no objects,
+- no narrative,
+- no symbolism,
+- no center of attention.
 
-To wizualizacja procesu, nie obrazu.
-
----
-
-## Czym jest hypnagogia?
-
-Hypnagogia to stan graniczny pomiędzy czuwaniem a snem, w którym:
-- kora wzrokowa przechodzi w tryb aktywności endogennej,
-- pojawiają się fosfeny, fale, mgły i struktury świetlne,
-- obrazy są pozbawione znaczenia narracyjnego,
-- percepcja skupia się na **ruchu, intensywności i relacjach przestrzennych**.
-
-Wiele osób opisuje ten stan jako:
-- niebieskawo-cyjanową „mgłę”,
-- czarne obszary bez treści,
-- subtelne jarzenie na granicach form,
-- powolne, pulsujące zmiany bez wyraźnego kierunku.
-
-**Hypnagogi** próbuje oddać właśnie ten typ doświadczenia — możliwie neutralnie i minimalistycznie.
+It is a visualization of a process, not an image.
 
 ---
 
-## Co robi program?
+## What is hypnagogia?
 
-Program renderuje w czasie rzeczywistym:
+Hypnagogia is a liminal state between wakefulness and sleep, in which:
+- the visual cortex shifts into endogenous activity,
+- phosphenes, waves, fogs, and luminous structures appear,
+- images lack narrative meaning,
+- perception focuses on **movement, intensity, and spatial relationships**.
 
-- **statyczną przestrzennie plazmę** (tekstura nie przesuwa się),
-- **dynamiczne jarzenie i shimmer** (zmienia się intensywność, nie pozycja),
-- dominującą paletę **ciemnych błękitów i cyjanów**,
-- brak ostrych krawędzi i brak punktu centralnego,
-- bardzo wolną, ciągłą ewolucję obrazu.
+Many people describe this state as:
+- a bluish-cyan “mist,”
+- black, contentless regions,
+- subtle glow at the boundaries of forms,
+- slow, pulsating changes without a clear direction.
 
-Nie ma tu obiektów, figur ani „zdarzeń”.
-Obraz **po prostu trwa i delikatnie się reorganizuje**.
-
----
-
-## Charakter projektu
-
-- inspirowany neurofenomenologią, nie psychodelikami
-- deterministyczny (brak losowych skoków)
-- niski kontrast, brak agresywnych zmian
-- przeznaczony do spokojnej obserwacji
-
-Projekt może być traktowany jako:
-- narzędzie eksploracji stanów granicznych,
-- eksperyment wizualny,
-- tło do medytacji lub refleksji,
-- materiał badawczy / estetyczny.
+**Hypnagogi** attempts to evoke precisely this type of experience — as neutrally and minimally as possible.
 
 ---
 
-## Wymagania
+## What does the program do?
+
+The program renders in real time:
+
+- **a spatially static plasma** (the texture does not move),
+- **dynamic glow and shimmer** (intensity changes, not position),
+- a dominant palette of **dark blues and cyans**,
+- no sharp edges and no central focal point,
+- very slow, continuous image evolution.
+
+There are no objects, figures, or “events.”  
+The image **simply persists and gently reorganizes itself**.
+
+---
+
+## Project characteristics
+
+- inspired by neurophenomenology, not psychedelics
+- deterministic (no random jumps)
+- low contrast, no aggressive changes
+- intended for calm observation
+
+The project can be treated as:
+- a tool for exploring liminal states,
+- a visual experiment,
+- a background for meditation or reflection,
+- research or aesthetic material.
+
+---
+
+## Requirements
 
 - Python **3.9+**
 - `pygame`
 
 ---
 
-## Instalacja i uruchomienie
+## Installation and running
 
-### 1. Klonowanie repozytorium
+### 1. Clone the repository
 ```bash
 git clone git@github.com:pkroliszewski/hypnagogi.git
 cd hypnagogi
 ```
 
-### 2. Utworzenie wirtualnego środowiska
+### 2. Create a virtual environment
 ```bash
 python3 -m venv .venv
 ```
 
-### 3. Aktywacja środowiska
+### 3. Activate the environment
 
-Linux
-
+Linux:
 ```bash
 source .venv/bin/activate
 ```
 
-Windows (Git Bash)
-
+Windows (Git Bash):
 ```bash
 source .venv/Scripts/activate
-
 ```
 
-### 4. Instalacja zależności
+---
+
+### 4. Install dependencies
 ```bash
 pip install -r requirements.txt
 ```
 
-### 5. Uruchomienie
+---
+
+### 5. Run
 ```bash
-python hipnagogi.py
+python hypnagogi.py
 ```
 
-Aby zakończyć nacisnij ESC
+Press **ESC** to exit.
 
-## Status projektu
+---
 
-Projekt jest eksperymentalny i rozwijany iteracyjnie.
-Nie dąży do realizmu biologicznego, lecz do fenomenologicznej zgodności.
+## Project status
 
-## Licencja
+The project is **experimental** and developed iteratively.  
+It does not aim for biological realism, but for **phenomenological coherence**.
+
+---
+
+## License
 
 MIT
