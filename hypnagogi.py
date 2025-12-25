@@ -5,6 +5,7 @@ import pygame
 import os
 from pathlib import Path
 import numpy as np
+import cv2
 
 W, H = 1024, 1024
 FPS = 60
@@ -12,12 +13,65 @@ FPS = 60
 # >>> Wydajność:
 SCALE = 3                       # było 3
 BG_UPDATE_EVERY = 1             # aktualizuj tło co N klatek
-NOISE_OCTAVES = 12               # było 4
+NOISE_OCTAVES = 16               # było 4
 
 PLASMA_EDGE_SHARPNESS = 3.0
 PLASMA_INTENSITY = 1.2
 CENTER_DETAIL_POWER = 3.2
 
+class VideoMap:
+    def __init__(self, path: str, target_w: int, target_h: int, loop: bool = True, slow_factor=4):
+        self.path = path
+        self.target_w = target_w
+        self.target_h = target_h
+        self.loop = loop
+        self.slow_factor = slow_factor
+        self._counter = 0
+
+        self.cap = cv2.VideoCapture(path)
+        if not self.cap.isOpened():
+            raise FileNotFoundError(f"Nie mogę otworzyć wideo: {path}")
+
+        self.fps = self.cap.get(cv2.CAP_PROP_FPS)
+        if not self.fps or self.fps <= 1:
+            self.fps = 30.0  # fallback
+
+        self._last_map = np.zeros((target_h, target_w), dtype=np.float32)
+
+    def read_map(self) -> np.ndarray:
+        self._counter += 1
+        if self._counter % self.slow_factor != 0:
+            return self._last_map  # pokazuj tę samą klatkę
+
+        ok, frame = self.cap.read()
+        if not ok:
+            if self.loop:
+                self.cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                ok, frame = self.cap.read()
+            if not ok:
+                return self._last_map  # fallback
+
+        # frame: BGR uint8 (H,W,3)
+        frame = cv2.resize(frame, (self.target_w, self.target_h), interpolation=cv2.INTER_AREA)
+        #frame = 255 - frame
+
+        # luminancja (percepcyjna)
+        b = frame[..., 0].astype(np.float32)
+        g = frame[..., 1].astype(np.float32)
+        r = frame[..., 2].astype(np.float32)
+        lum = (0.0722 * b + 0.7152 * g + 0.2126 * r) / 255.0  # 0..1
+
+        # delikatne podbicie kontrastu (żeby było rozpoznawalne)
+        lum = np.clip((lum - 0.5) * 1.35 + 0.5, 0.0, 1.0).astype(np.float32)
+
+        self._last_map = lum
+        return lum
+
+    def release(self):
+        try:
+            self.cap.release()
+        except Exception:
+            pass
 
 def _seed_offsets(seeds):
     """Zamienia listę seedów na stabilne offsety (ox, oy) dla fbm."""
@@ -203,6 +257,10 @@ def main():
     img_map = load_image_shimmer_map("memories/1.png", bg_w, bg_h)
     img_map2 = load_image_shimmer_map("memories/2.png", bg_w, bg_h)
 
+    print("Loading video memories")
+    video = VideoMap("memories/clip3.mp4", bg_w, bg_h, loop=True, slow_factor=4)
+
+
     CACHE_DIR = ".noise_cache"
 
     # Ustal częstotliwości osobno:
@@ -239,11 +297,16 @@ def main():
     ys = (np.arange(bg_h) + 0.5) * SCALE
     PX, PY = np.meshgrid(xs, ys)  # shape: (bg_h, bg_w)
 
-    RX = (PX - W * 0.5) / (W * 0.5)
-    RY = (PY - H * 0.5) / (H * 0.5)
+    RX = (PX - W * 0.5) / (W )
+    RY = (PY - H * 0.5) / (H )
+    RX1 = (PX - W * 0.5) / (W * 0.5)
+    RY1 = (PY - H * 0.5) / (H * 0.5)
     R = np.sqrt(RX * RX + RY * RY)
-
-    center_map = np.clip(1.0 - R, 0.0, 1.0).astype(np.float32) ** CENTER_DETAIL_POWER
+    R1 = np.sqrt(RX1 * RX1 + RY1 * RY1)
+    # w init:
+    R = np.clip(R, 0, 2).astype(np.float32)   # zachowaj do użycia dynamicznie
+    R1 =np.clip(R1,0,1).astype(np.float32)
+    center_map = np.clip(1.0 - R1, 0.0, 1.0).astype(np.float32) ** CENTER_DETAIL_POWER
 
     # widok na bufor (tworzysz raz!)
     buf_view = np.frombuffer(rgb_buf, dtype=np.uint8).reshape(bg_h, bg_w, 3)
@@ -257,8 +320,7 @@ def main():
         t += dt
         frame += 1
 
-
-
+        #img_s = video.read_map()  # shape (bg_h, bg_w), float32 0..1
 
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
@@ -286,6 +348,27 @@ def main():
         f = f * f * (3.0 - 2.0 * f)     # smoothstep
         invf = 1.0 - f
 
+        speed = 0.09      # jak szybko wchodzi (w jednostkach "promienia" na sekundę)
+        sigma = 0.12      # grubość pierścienia (mniej = ostrzej)
+        gamma = 0.04       # kontrast pierścienia
+
+        # promień fali: 1 -> 0 -> 1 ...
+        r0 =  - ((-t * speed) % 1.0)
+        r1 = r0
+        r2 = (r0 + 0.50) % 1.0
+        r3 = (r0 + 13.0) % 1.0
+
+        ring = (
+            0.50 * np.exp(-2.0 * ((R + r1) / sigma) ** 2) +
+            0.20 * np.exp(-3.0 * ((R - r2) / sigma) ** 2) +
+            0.10 * np.exp(-5.0 * ((R - r3) / sigma) ** 2)
+        ).astype(np.float32)
+
+        ring = np.clip(ring, 0.0, 1.0) #** gamma
+
+        #ring = np.exp(-0.5 * ((R - r0) / sigma) ** 2).astype(np.float32)  # 0..1
+        #ring = ring ** gamma
+
         # blend map (wektorowo)
         n_base = invf * base_maps[i0] + f * base_maps[i1]
         n_shim = invf * shimmer_maps[i0] + f * shimmer_maps[i1]
@@ -294,31 +377,27 @@ def main():
         base_field = base_field.astype(np.float32)
 
         # 2) shimmer (czasowy połysk)
-        shimmer_mask = -0.55 + 2.45 * np.sin(n_shim * 3.0 + t * np.sin(t*0.1))
-        img_shimmer = (1.15*np.sin(t*1.2) + 1.1 * img_s * np.sin(3.0 + 0.2* t * np.sin(t*0.5))).astype(np.float32)
+        shimmer_mask = -0.55 + 2.45 * np.sin(n_shim * 1.0 + t * np.sin(t*0.1))
+        img_shimmer = (0.15 * img_s * np.sin(1.0 + 0.2* t * np.sin(t*0.5))).astype(np.float32)
 
-        if(int(t) % 4 == 0):
-            if img_idx==1:
-                img_s = img_map
-                img_idx = 0
-            else:
-                img_s = img_map2
-                img_idx = 1
 
-        shimmer_field = (shimmer_mask * img_shimmer).astype(np.float32)
+
+        #shimmer_field = (shimmer_mask * img_shimmer).astype(np.float32)
+        shimmer_field = (shimmer_mask).astype(np.float32)
 
         # 3) połącz: baza + połysk (połysk jako "dodatek", nie jako bramka)
-        ii = PLASMA_INTENSITY * center_map * (0.20 + 1.80 * base_field)   # baza zawsze >0
-        ii *= (0.65 + 0.35 * shimmer_field)                               # shimmer moduluje, nie zabija
+        ii = PLASMA_INTENSITY * center_map * (0.20 + 0.80 * base_field) # baza zawsze >0
+        ii *= ( 0.15+0.9 * shimmer_field)                               # shimmer moduluje, nie zabija
+        ii += (1.1 * ring * n_base)
 
-        ii = np.clip(ii, 0.0, 1.2)
+        ii = np.clip(ii, 0.0, 1)
 
         # 4) tint tylko do koloru (nie do jasności)
-        tint = 0.45 * np.sin(t * 0.8 + n_base * 3.0).astype(np.float32)
+        tint = 0.35 * np.sin(t * 0.8 + n_base * n_shim* 3.0).astype(np.float32)
 
-        b = (40 + 200 * ii + 20 * tint).clip(0, 255).astype(np.uint8)
-        g = (10 + 140 * ii + 40 * tint).clip(0, 255).astype(np.uint8)
-        r = (0  + 35  * ii +30 * tint).clip(0, 255).astype(np.uint8)
+        b = (0 + 250 * ii + 20 * tint).clip(0, 255).astype(np.uint8)
+        g = (5 + 190 * ii + 40 * tint).clip(0, 255).astype(np.uint8)
+        r = (0  + 35  * ii + 30 * tint).clip(0, 255).astype(np.uint8)
 
         buf_view[..., 0] = r
         buf_view[..., 1] = g
